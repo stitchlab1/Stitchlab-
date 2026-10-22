@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Timer, ChevronRight } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Timer, ChevronRight, Pause, Play, Hand } from "lucide-react";
 
 interface LearningTimerProps {
   isLoggedIn: boolean;
@@ -7,78 +7,126 @@ interface LearningTimerProps {
 }
 
 export default function LearningTimer({ isLoggedIn, uid }: LearningTimerProps) {
+  // Always starts counting from 0 upon student entry / opening the page
   const [seconds, setSeconds] = useState<number>(0);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isPageVisible, setIsPageVisible] = useState<boolean>(!document.hidden);
+  // Starts active immediately upon entry ("يبدا يعد فور دخول الطالب")
+  const [isTouchActive, setIsTouchActive] = useState<boolean>(true);
 
-  // Sync internal state when isLoggedIn/uid changes or on mount
+  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Requirement: "يبدا يعد فور دخول الطالب ولو خرج اقفل الصفحة ودخل مرة اخرى يبدا العد من صفر"
+  // Whenever the student enters, reset and start from 0
   useEffect(() => {
-    if (isLoggedIn && uid) {
-      const storageKey = `stitchlab_learning_seconds_${uid}`;
-      const savedTime = localStorage.getItem(storageKey);
-      if (savedTime) {
-        setSeconds(parseInt(savedTime, 10));
-      } else {
-        // First login: starts at 0
-        setSeconds(0);
-        localStorage.setItem(storageKey, "0");
-      }
-    } else {
-      // Stopped/reset if not logged in
+    if (isLoggedIn) {
       setSeconds(0);
+      setIsTouchActive(true);
+    } else {
+      setSeconds(0);
+      setIsTouchActive(false);
     }
   }, [isLoggedIn, uid]);
 
-  // Handle visibility changes to stop timer when minimized/hidden/tab switched ("عند اغلاق البرنامج اجعله يتوقف")
+  // Requirement: "ولو توقف اللمس يتوقف العد"
+  // Detect touch / interaction. If touch stops for 4 seconds, the count pauses.
+  useEffect(() => {
+    if (!isLoggedIn) return;
+
+    // Reset inactivity timer and keep counting active while touched
+    const resetTouchActivity = () => {
+      setIsTouchActive(true);
+
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+
+      // If no touch occurs for 4 seconds, pause the timer ("توقف اللمس يتوقف العد")
+      inactivityTimerRef.current = setTimeout(() => {
+        setIsTouchActive(false);
+      }, 4000);
+    };
+
+    // Initial activity upon entry ("يبدا يعد فور دخول الطالب")
+    resetTouchActivity();
+
+    // Event listeners covering all touch and pointer interactions
+    const touchEvents = [
+      "touchstart",
+      "touchmove",
+      "touchend",
+      "pointerdown",
+      "pointermove",
+      "pointerup",
+      "mousedown",
+      "mousemove",
+      "click",
+      "scroll",
+      "keydown"
+    ];
+
+    const handleInteraction = () => {
+      resetTouchActivity();
+    };
+
+    touchEvents.forEach((evt) => {
+      window.addEventListener(evt, handleInteraction, { passive: true });
+    });
+
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      touchEvents.forEach((evt) => {
+        window.removeEventListener(evt, handleInteraction);
+      });
+    };
+  }, [isLoggedIn]);
+
+  // Handle visibility changes to stop timer when minimized/hidden/tab switched
   useEffect(() => {
     const handleVisibilityChange = () => {
       setIsPageVisible(!document.hidden);
+      if (document.hidden) {
+        setIsTouchActive(false);
+      }
+    };
+
+    const handleWindowFocus = () => {
+      setIsPageVisible(true);
+      setIsTouchActive(true);
+    };
+    const handleWindowBlur = () => {
+      setIsPageVisible(false);
+      setIsTouchActive(false);
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    
-    // Also listen to window unload/pagehide to stop the timer and ensure it persists the correct time
-    const handleUnloadAndStop = () => {
-      setIsPageVisible(false);
-    };
-    
-    // Listen to focus and blur of window to stop/resume precisely
-    const handleWindowFocus = () => setIsPageVisible(true);
-    const handleWindowBlur = () => setIsPageVisible(false);
-
-    window.addEventListener("beforeunload", handleUnloadAndStop);
-    window.addEventListener("pagehide", handleUnloadAndStop);
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("blur", handleWindowBlur);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("beforeunload", handleUnloadAndStop);
-      window.removeEventListener("pagehide", handleUnloadAndStop);
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("blur", handleWindowBlur);
     };
   }, []);
 
-  // Update timer every second only if student is logged in AND page is active/visible
+  // Update timer every second ONLY when student is logged in, page is visible, AND touch/interaction is active
   useEffect(() => {
-    let interval: any = null;
-    if (isLoggedIn && uid && isPageVisible) {
+    let interval: NodeJS.Timeout | null = null;
+    const isCounting = isLoggedIn && isPageVisible && isTouchActive;
+
+    if (isCounting) {
       interval = setInterval(() => {
-        setSeconds((prev) => {
-          const next = prev + 1;
-          const storageKey = `stitchlab_learning_seconds_${uid}`;
-          localStorage.setItem(storageKey, next.toString());
-          return next;
-        });
+        setSeconds((prev) => prev + 1);
       }, 1000);
-    } else {
-      if (interval) clearInterval(interval);
     }
+
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isLoggedIn, uid, isPageVisible]);
+  }, [isLoggedIn, isPageVisible, isTouchActive]);
 
   // Format time as HH:MM:SS
   const formatTime = (totalSecs: number): string => {
@@ -90,6 +138,8 @@ export default function LearningTimer({ isLoggedIn, uid }: LearningTimerProps) {
     return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
   };
 
+  if (!isLoggedIn) return null;
+
   return (
     <div 
       id="learning-timer-widget"
@@ -97,18 +147,26 @@ export default function LearningTimer({ isLoggedIn, uid }: LearningTimerProps) {
       dir="rtl"
     >
       {isCollapsed ? (
-        // Collapased State: Sleek interactive small circle button
+        // Collapsed State: Sleek interactive circle button with status glow
         <button
           type="button"
           onClick={() => setIsCollapsed(false)}
-          className="flex items-center justify-center p-3 bg-gradient-to-tr from-pink-600 to-purple-600 text-white rounded-full shadow-lg hover:scale-110 active:scale-95 transition-all cursor-pointer border border-white/20"
-          title="فتح مؤقت التعلم"
+          className={`flex items-center justify-center p-3 rounded-full shadow-lg hover:scale-110 active:scale-95 transition-all cursor-pointer border border-white/20 ${
+            isTouchActive && isPageVisible
+              ? "bg-gradient-to-tr from-pink-600 to-purple-600 text-white shadow-pink-500/20"
+              : "bg-slate-700 text-amber-300 border-amber-400/40"
+          }`}
+          title={isTouchActive ? "مؤقت التعلم (نشط ويعد الآن)" : "مؤقت التعلم (متوقف - المس الشاشة للمتابعة)"}
         >
-          <Timer className="w-5 h-5 animate-pulse" />
+          <Timer className={`w-5 h-5 ${isTouchActive && isPageVisible ? "animate-pulse" : "opacity-80"}`} />
         </button>
       ) : (
-        // Expanded State: Elegant Glassmorphism control card
-        <div className="bg-white/90 backdrop-blur-md rounded-2xl p-3 shadow-xl border border-pink-100 flex items-center gap-3 animate-fadeIn max-w-[280px]">
+        // Expanded State: Glassmorphism control card with live status indicator
+        <div className={`backdrop-blur-md rounded-2xl p-3 shadow-xl border transition-all duration-200 flex items-center gap-3 animate-fadeIn max-w-[300px] ${
+          isTouchActive && isPageVisible
+            ? "bg-white/95 border-pink-100 shadow-pink-500/10"
+            : "bg-amber-50/95 border-amber-200 shadow-amber-500/10"
+        }`}>
           {/* Collapse toggle button */}
           <button
             type="button"
@@ -121,13 +179,36 @@ export default function LearningTimer({ isLoggedIn, uid }: LearningTimerProps) {
 
           {/* Time & Title Info */}
           <div className="flex flex-col text-right">
-            <span className="text-[10px] font-bold text-pink-600 flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
-              مؤقت التعلم
-            </span>
-            <span className="text-sm font-extrabold text-slate-800 font-mono tracking-wider mt-0.5 select-all">
-              {formatTime(seconds)}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-pink-600 flex items-center gap-1">
+                {isTouchActive && isPageVisible ? (
+                  <>
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span>مؤقت التعلم (يعد الآن)</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+                    <span className="text-amber-800 font-bold">متوقف (توقف اللمس)</span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-baseline gap-2 mt-0.5">
+              <span className={`text-base font-extrabold font-mono tracking-wider select-all ${
+                isTouchActive && isPageVisible ? "text-slate-800" : "text-amber-900/80"
+              }`}>
+                {formatTime(seconds)}
+              </span>
+              
+              {!isTouchActive && (
+                <span className="text-[9px] font-bold text-amber-700 animate-pulse flex items-center gap-0.5">
+                  <Hand className="w-2.5 h-2.5" />
+                  <span>المس الشاشة للاستئناف</span>
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

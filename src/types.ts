@@ -324,7 +324,7 @@ export const playAudioFeedback = (isCorrect: boolean) => {
   if ("speechSynthesis" in window) {
     try {
       window.speechSynthesis.cancel(); // Stop current speaking to play this feedback clearly and immediately
-            const phrase = isCorrect ? "Great job!" : "Try again!";
+      const phrase = isCorrect ? "Great job!" : "Try again!";
       const utterance = new SpeechSynthesisUtterance(phrase);
       
       utterance.lang = "en-GB"; // Enforce British English accent
@@ -389,6 +389,3 @@ export const playButtonClickSound = () => {
     // Fail silently so as not to interrupt app flow
   }
 };
-
-
-

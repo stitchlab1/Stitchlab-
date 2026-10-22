@@ -11,7 +11,7 @@ import {
   Copy, 
   Check, 
   Sparkles,
-  ExternalLink
+  KeyRound
 } from "lucide-react";
 import { 
   auth, 
@@ -22,7 +22,8 @@ import {
   GoogleAuthProvider, 
   reauthenticateWithCredential, 
   reauthenticateWithPopup, 
-  verifyBeforeUpdateEmail 
+  verifyBeforeUpdateEmail,
+  sendPasswordResetEmail
 } from "firebase/auth";
 
 interface ChangeEmailSectionProps {
@@ -39,11 +40,22 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
   const isGoogleUser = providerData.some((p) => p.providerId === "google.com");
   const isPasswordUser = providerData.some((p) => p.providerId === "password");
 
+  // Track if user has extracted or linked a password for this account
+  const [hasExtractedPassword, setHasExtractedPassword] = useState<boolean>(() => {
+    if (!currentUser?.uid) return false;
+    return localStorage.getItem(`stitchlab_extracted_password_${currentUser.uid}`) === "true";
+  });
+
+  const hasPassword = isPasswordUser || hasExtractedPassword;
+  const isGoogleAndPassword = isGoogleUser && hasPassword;
+  const isGoogleOnly = isGoogleUser && !hasPassword;
+
   // Form State
   const [newEmail, setNewEmail] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [extractLoading, setExtractLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [copiedCurrent, setCopiedCurrent] = useState(false);
 
@@ -85,6 +97,37 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
     }
   };
 
+  // Action: Extract/Set password for Google account
+  const handleExtractPassword = async () => {
+    if (!currentUser || !currentUser.email) {
+      const err = "لم يتم العثور على بريد إلكتروني مسجل لاستخراج كلمة المرور.";
+      setStatusMessage({ type: "error", text: err });
+      showToast(err, "error");
+      return;
+    }
+
+    setExtractLoading(true);
+    setStatusMessage(null);
+
+    try {
+      await sendPasswordResetEmail(auth, currentUser.email);
+      if (currentUser.uid) {
+        localStorage.setItem(`stitchlab_extracted_password_${currentUser.uid}`, "true");
+      }
+      setHasExtractedPassword(true);
+      const msg = "تم إرسال رابط استخراج وتعيين كلمة المرور إلى بريدك بنجاح! تم تحديث حسابك إلى: حساب مسجل بقوقل وكلمة مرور.";
+      setStatusMessage({ type: "success", text: msg });
+      showToast(msg, "success");
+    } catch (err: any) {
+      console.error("Extract password error:", err);
+      const msg = "تعذر إرسال رابط كلمة المرور. يرجى التأكد من اتصالك بالإنترنت والمحاولة مجدداً.";
+      setStatusMessage({ type: "error", text: msg });
+      showToast(msg, "error");
+    } finally {
+      setExtractLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setStatusMessage(null);
@@ -120,8 +163,8 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
       return;
     }
 
-    // If password user, ensure current password is provided
-    if (isPasswordUser && !currentPassword) {
+    // If password user without Google, ensure password is provided
+    if (isPasswordUser && !isGoogleUser && !currentPassword) {
       const msg = "يرجى إدخال كلمة المرور الحالية لتأكيد هويتك ومتابعة التغيير.";
       setStatusMessage({ type: "error", text: msg });
       showToast(msg, "error");
@@ -132,11 +175,8 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
 
     try {
       // 2. Re-authentication Logic
-      if (isPasswordUser) {
-        // Re-authenticate with Email/Password
-        if (!currentUser.email) {
-          throw new Error("لا يوجد بريد إلكتروني مسجل للمستخدم الحالي.");
-        }
+      if (currentPassword && currentUser.email) {
+        // Re-authenticate with Email/Password if password is provided
         const credential = EmailAuthProvider.credential(currentUser.email, currentPassword);
         await reauthenticateWithCredential(currentUser, credential);
       } else if (isGoogleUser) {
@@ -144,16 +184,11 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
         const provider = new GoogleAuthProvider();
         provider.setCustomParameters({ prompt: "select_account" });
         await reauthenticateWithPopup(currentUser, provider);
+      } else if (currentPassword) {
+        const credential = EmailAuthProvider.credential(currentUser.email || "", currentPassword);
+        await reauthenticateWithCredential(currentUser, credential);
       } else {
-        // Fallback if neither flag was detected but user has password
-        if (currentPassword) {
-          const credential = EmailAuthProvider.credential(currentUser.email || "", currentPassword);
-          await reauthenticateWithCredential(currentUser, credential);
-        } else {
-          const provider = new GoogleAuthProvider();
-          provider.setCustomParameters({ prompt: "select_account" });
-          await reauthenticateWithPopup(currentUser, provider);
-        }
+        throw new Error("يرجى إدخال كلمة المرور لتأكيد الهوية والمتابعة.");
       }
 
       // 3. Trigger verifyBeforeUpdateEmail
@@ -228,7 +263,7 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
                 <p>📩 خطوات استكمال التحديث:</p>
                 <ol className="list-decimal list-inside pr-1 space-y-0.5 text-slate-700">
                   <li>افتح بريدك الإلكتروني الجديد وافحص صندوق الوارد (أو الرسائل غير المرغوبة).</li>
-                  <li>انقر على رابط التأكيد المُرسل من Firebase لتفعيل التغيير.</li>
+                  <li>انقر على رابط التأكيد المُرسل لتفعيل التغيير.</li>
                   <li>بعد التأكيد، ستتمكن من تسجيل الدخول فوراً ببريدك الجديد!</li>
                 </ol>
               </div>
@@ -237,8 +272,13 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
         </div>
       )}
 
-      {/* 💡 Styled Alert Box for Google Users (إرشادات مهمة لمستخدمي Google) */}
-      {isGoogleUser && (
+      {/* 
+        Requirement 1: 
+        عند تبديل الحساب المسجل بقوقل واستخراج كلمة مرور للحساب تختفي جميع الارشادات المخصصة بحساب مسجل بقوقل ويتغير إلى حساب مسجل بقوقل وكلمة مرور
+        This block ONLY shows if the user is registered with Google ONLY and has NOT extracted a password.
+        Once a password is extracted or linked, ALL Google-specific instructions disappear!
+      */}
+      {isGoogleOnly && (
         <div 
           className="p-3.5 sm:p-4 rounded-2xl bg-sky-50 border border-sky-200 text-sky-950 text-right space-y-2 shadow-2xs animate-fadeIn" 
           dir="rtl"
@@ -260,9 +300,39 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
             </div>
             <div className="flex items-start gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-500 shrink-0 mt-1.5"></span>
-              <span>في شاشة الدخول، اضغط &quot;نسيت كلمة المرور؟&quot; لإنشاء كلمة سر لبريدك الجديد والدخول بحسابك.</span>
+              <span>في شاشة الدخول، اضغط &quot;نسيت كلمة المرور؟&quot; أو استخدم زر استخراج كلمة المرور أدناه لإنشاء كلمة سر لحسابك والدخول بها.</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Action to extract a password for Google accounts (استخراج كلمة مرور للحساب) */}
+      {isGoogleOnly && (
+        <div className="p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 flex items-center justify-between gap-3 text-right">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
+              <KeyRound className="w-4 h-4" />
+            </div>
+            <div>
+              <h5 className="text-xs font-black text-purple-950">استخراج كلمة مرور للحساب</h5>
+              <p className="text-[10px] text-purple-800/80 font-bold">
+                أنشئ كلمة مرور لحسابك ليصبح مسجلاً بقوقل وكلمة مرور معاً
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleExtractPassword}
+            disabled={extractLoading}
+            className="py-1.5 px-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black transition-all shadow-xs shrink-0 cursor-pointer disabled:opacity-50 active:scale-95 flex items-center gap-1"
+          >
+            {extractLoading ? (
+              <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+            ) : (
+              <KeyRound className="w-3.5 h-3.5" />
+            )}
+            <span>استخراج كلمة المرور</span>
+          </button>
         </div>
       )}
 
@@ -298,8 +368,14 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
           </div>
           <div className="flex items-center gap-1.5 text-[10px] text-purple-800/80 font-bold pr-1">
             <span>نوع التسجيل:</span>
-            <span className="px-1.5 py-0.2 rounded-md bg-purple-100/70 text-purple-900 font-black">
-              {isGoogleUser ? "حساب Google 🌐" : isPasswordUser ? "بريد وكلمة مرور 🔑" : "حساب مسجل"}
+            <span className="px-2 py-0.5 rounded-md bg-purple-100/70 text-purple-900 font-black">
+              {isGoogleAndPassword 
+                ? "حساب مسجل بقوقل وكلمة مرور 🌐🔑" 
+                : isGoogleOnly 
+                ? "حساب مسجل بقوقل 🌐" 
+                : isPasswordUser 
+                ? "بريد وكلمة مرور 🔑" 
+                : "حساب مسجل"}
             </span>
           </div>
         </div>
@@ -327,23 +403,23 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
             سيتم إرسال رابط التفعيل إلى هذا العنوان قبل اعتماده رسمياً.
           </span>
 
-          {/* Conditional subtle note for standard Email/Password users */}
-          {isPasswordUser && (
+          {/* Conditional subtle note for standard Password users or Google+Password users */}
+          {hasPassword && (
             <p className="text-[10.5px] text-slate-500 font-bold pr-1 pt-0.5 leading-relaxed">
-              ملاحظة: عند تغيير بريدك وتأكيده، ستظل كلمة المرور الحالية كما هي دون تغيير.
+              ملاحظة: عند تغيير بريدك وتأكيده، ستظل كلمة المرور كما هي دون تغيير.
             </p>
           )}
         </div>
 
         {/* 3. Provider Authentication Section */}
-        {isPasswordUser ? (
-          // Email/Password Users: Show Current Password Field
+        {hasPassword ? (
+          // Has Password (either password-only or Google+Password): Show password verification field
           <div className="space-y-1.5 pt-1 border-t border-slate-100">
             <label className="text-[11px] font-black text-slate-700 flex items-center justify-between">
               <span className="flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-purple-600" />
                 <span>كلمة المرور الحالية</span>
-                <span className="text-rose-500">*</span>
+                {!isGoogleUser && <span className="text-rose-500">*</span>}
               </span>
               <span className="text-[9.5px] text-purple-600 font-extrabold">تأكيد الأمان</span>
             </label>
@@ -353,7 +429,7 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="أدخل كلمة المرور الحالية لحسابك..."
-                required
+                required={!isGoogleUser}
                 disabled={isLoading}
                 dir="ltr"
                 className="w-full bg-white border border-purple-200 rounded-xl px-3.5 py-2.5 pr-10 text-xs text-left font-sans font-bold text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-purple-500/40 focus:border-purple-500 transition-all shadow-2xs"
@@ -371,8 +447,8 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
               مطلوبة لإثبات ملكيتك للحساب وحمايته من التغييرات غير المصرح بها.
             </span>
           </div>
-        ) : isGoogleUser ? (
-          // Google Sign-In Users: Hide password field, show Google prompt
+        ) : isGoogleOnly ? (
+          // Google Sign-In Only Users: Show Google prompt
           <div className="p-3.5 rounded-2xl bg-sky-50/70 border border-sky-100 space-y-1.5 text-right">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-lg bg-white border border-sky-200 flex items-center justify-center text-xs shrink-0 shadow-2xs">
@@ -385,7 +461,7 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
             </p>
           </div>
         ) : (
-          // Fallback if provider is neither or mixed: show optional password
+          // Fallback
           <div className="space-y-1.5 pt-1 border-t border-slate-100">
             <label className="text-[11px] font-black text-slate-700 flex items-center gap-1.5">
               <Lock className="w-3.5 h-3.5 text-purple-600" />
@@ -424,7 +500,7 @@ export default function ChangeEmailSection({ onBack, showToast }: ChangeEmailSec
                 <span className="w-4 h-4 rounded-full border-2 border-white border-t-transparent animate-spin"></span>
                 <span>جاري التحقق وتحديث البريد...</span>
               </>
-            ) : isGoogleUser ? (
+            ) : isGoogleOnly ? (
               <>
                 <span>🌐 حفظ وتأكيد الهوية بـ Google</span>
               </>

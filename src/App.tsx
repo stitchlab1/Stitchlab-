@@ -562,6 +562,7 @@ export default function App() {
     updatedAt: string;
   } | null>(null);
   const [showRestoreSuggestion, setShowRestoreSuggestion] = useState<boolean>(false);
+  const [accountSecurityTick, setAccountSecurityTick] = useState<number>(0);
 
   useEffect(() => {
     const updateOnlineStatus = () => {
@@ -4150,7 +4151,19 @@ export default function App() {
                           </div>
                         </div>
                         <span className="text-[9.5px] font-black px-2 py-0.5 rounded-lg bg-white border border-purple-150 text-purple-700 shadow-2xs">
-                          {auth.currentUser.providerData.some(p => p.providerId === "google.com") ? "حساب Google 🌐" : "بريد وكلمة مرور 🔑"}
+                          {(() => {
+                            const isGoogle = auth.currentUser.providerData.some(p => p.providerId === "google.com");
+                            const isPass = auth.currentUser.providerData.some(p => p.providerId === "password");
+                            const hasExtracted = !!(auth.currentUser.uid && localStorage.getItem(`stitchlab_extracted_password_${auth.currentUser.uid}`) === "true");
+                            const hasPassword = isPass || hasExtracted;
+                            if (isGoogle && hasPassword) {
+                              return "حساب مسجل بقوقل وكلمة مرور 🌐🔑";
+                            }
+                            if (isGoogle) {
+                              return "حساب Google 🌐";
+                            }
+                            return "بريد وكلمة مرور 🔑";
+                          })()}
                         </span>
                       </div>
 
@@ -4176,6 +4189,45 @@ export default function App() {
                           <span className="text-sm">←</span>
                         </div>
                       </button>
+
+                      {/* Option / Card: Extract Password for Google Account (استخراج كلمة مرور للحساب) */}
+                      {auth.currentUser.providerData.some(p => p.providerId === "google.com") && 
+                       !(auth.currentUser.providerData.some(p => p.providerId === "password") || (auth.currentUser.uid && localStorage.getItem(`stitchlab_extracted_password_${auth.currentUser.uid}`) === "true")) && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              if (!auth.currentUser?.email) return;
+                              const { sendPasswordResetEmail } = await import("firebase/auth");
+                              await sendPasswordResetEmail(auth, auth.currentUser.email);
+                              if (auth.currentUser.uid) {
+                                localStorage.setItem(`stitchlab_extracted_password_${auth.currentUser.uid}`, "true");
+                              }
+                              alert("تم إرسال رابط استخراج وتعيين كلمة المرور إلى بريدك الإلكتروني بنجاح! تم تحويل حسابك إلى: حساب مسجل بقوقل وكلمة مرور.");
+                              setAccountSecurityTick(prev => prev + 1);
+                            } catch (e: any) {
+                              alert("تعذر إرسال الرابط: " + (e?.message || "يرجى المحاولة لاحقاً"));
+                            }
+                          }}
+                          className="w-full flex items-center justify-between p-3 rounded-xl bg-purple-50 hover:bg-purple-100/70 border border-purple-200 transition-all text-right cursor-pointer group active:scale-[0.98] shadow-xs"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-purple-200 text-purple-800 flex items-center justify-center text-sm group-hover:scale-110 transition-transform">
+                              🔑
+                            </div>
+                            <div className="text-right">
+                              <h5 className="text-xs font-black text-purple-950">استخراج كلمة مرور للحساب</h5>
+                              <span className="text-[10px] text-purple-700 font-bold block">
+                                إنشاء كلمة سر لتسجيل الدخول بكلمة المرور أو بقوقل معاً
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 text-purple-700 font-black text-xs group-hover:-translate-x-1 transition-transform">
+                            <span>استخراج</span>
+                            <span className="text-sm">←</span>
+                          </div>
+                        </button>
+                      )}
                     </div>
                   )}
 
